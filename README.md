@@ -15,7 +15,7 @@ EdgeMesh, as the data plane component of the [KubeEdge](https://github.com/kubee
 
 ### Background
 
-KubeEdge is build based on [Kubernetes](https://github.com/kubernetes/kubernetes), extending cloud-native containerized application orchestration capabilities to the edge. However, at the scenario of edge computer, the network topology is more complex. Edge nodes in different areas are often not interconnected, and the inter-communication of traffic between applications is the primary requirement of the business. For this scenairo, EdgeMesh offers a solution.
+KubeEdge is built based on [Kubernetes](https://github.com/kubernetes/kubernetes), extending cloud-native containerized application orchestration capabilities to the edge. However, in the scenario of edge computing, the network topology is more complex. Edge nodes in different areas are often not interconnected, and the inter-communication of traffic between applications is the primary requirement of the business. For this scenario, EdgeMesh offers a solution.
 
 ### Why EdgeMesh?
 
@@ -109,7 +109,7 @@ EdgeMesh satisfies the new requirements in edge scenarios (e.g., limited edge re
   </tr>
 </table>
 
-**Noting:**
+**Note:**
 
 - `✓` Features supported by the EdgeMesh version
 - `+` Features not available in the EdgeMesh version, but will be supported in subsequent versions
