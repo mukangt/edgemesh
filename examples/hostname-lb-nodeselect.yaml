@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: hostname-lb-edge
+  labels:
+    app: hostname-lb-edge
+spec:
+  selector:
+    matchLabels:
+      app: hostname-lb-edge
+  template:
+    metadata:
+      labels:
+        app: hostname-lb-edge
+    spec:
+      imagePullSecrets:
+        - name: tcr
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                - key: node-role.kubernetes.io/edge
+                  operator: Exists
+                - key: node-role.kubernetes.io/agent
+                  operator: Exists
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                  - 20000c
+                  - 88888c
+      containers:
+        - name: hostname
+          image: toolcenter.tencentcloudcr.com/w3-tools/kvp/serve_hostname:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 9376
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: hostname-lb-svc
+  annotations:
+    # Enable per-request node routing via the X-EdgeMesh-Target-Node HTTP header.
+    edgemesh.kubeedge.io/node-select: "true"
+    # Optional: fall back to a random endpoint when the target node has no pods.
+    # Remove or set to "false" to return an error instead (default).
+    edgemesh.kubeedge.io/node-select-fallback: "false"
+spec:
+  selector:
+    app: hostname-lb-edge
+  ports:
+    - name: http-0
+      port: 12345
+      protocol: TCP
+      targetPort: 9376

@@ -206,31 +206,34 @@ func (lb *LoadBalancer) syncServices() {
 }
 
 func (lb *LoadBalancer) Run() error {
-	if lb.Config.Caller == defaults.GatewayCaller {
-		kubeInformerFactory := informers.NewSharedInformerFactory(lb.kubeClient, lb.syncPeriod)
-		serviceInformer := kubeInformerFactory.Core().V1().Services()
-		serviceInformer.Informer().AddEventHandlerWithResyncPeriod(
-			cache.ResourceEventHandlerFuncs{
-				AddFunc:    lb.handleAddService,
-				UpdateFunc: lb.handleUpdateService,
-				DeleteFunc: lb.handleDeleteService,
-			},
-			lb.syncPeriod,
-		)
-		go lb.runService(serviceInformer.Informer().HasSynced, lb.stopCh)
-		endpointsInformer := kubeInformerFactory.Core().V1().Endpoints()
-		endpointsInformer.Informer().AddEventHandlerWithResyncPeriod(
-			cache.ResourceEventHandlerFuncs{
-				AddFunc:    lb.handleAddEndpoints,
-				UpdateFunc: lb.handleUpdateEndpoints,
-				DeleteFunc: lb.handleDeleteEndpoints,
-			},
-			lb.syncPeriod,
-		)
-		go lb.runEndpoints(endpointsInformer.Informer().HasSynced, lb.stopCh)
-		kubeInformerFactory.Start(lb.stopCh)
-		go lb.syncRunner.Loop(lb.stopCh)
-	}
+	// Service informer is needed in both GatewayCaller and ProxyCaller modes:
+	// - GatewayCaller: drives port binding via mergeService/unmergeService
+	// - ProxyCaller:   vendor userspace Proxier calls lb.NewService() directly and
+	//                  never triggers mergeService, so syncNodeSelectPolicy would
+	//                  never fire without this informer.
+	kubeInformerFactory := informers.NewSharedInformerFactory(lb.kubeClient, lb.syncPeriod)
+	serviceInformer := kubeInformerFactory.Core().V1().Services()
+	serviceInformer.Informer().AddEventHandlerWithResyncPeriod(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc:    lb.handleAddService,
+			UpdateFunc: lb.handleUpdateService,
+			DeleteFunc: lb.handleDeleteService,
+		},
+		lb.syncPeriod,
+	)
+	go lb.runService(serviceInformer.Informer().HasSynced, lb.stopCh)
+	endpointsInformer := kubeInformerFactory.Core().V1().Endpoints()
+	endpointsInformer.Informer().AddEventHandlerWithResyncPeriod(
+		cache.ResourceEventHandlerFuncs{
+			AddFunc:    lb.handleAddEndpoints,
+			UpdateFunc: lb.handleUpdateEndpoints,
+			DeleteFunc: lb.handleDeleteEndpoints,
+		},
+		lb.syncPeriod,
+	)
+	go lb.runEndpoints(endpointsInformer.Informer().HasSynced, lb.stopCh)
+	kubeInformerFactory.Start(lb.stopCh)
+	go lb.syncRunner.Loop(lb.stopCh)
 
 	istioInformerFactory := istioinformers.NewSharedInformerFactory(lb.istioClient, lb.syncPeriod)
 	drInformer := istioInformerFactory.Networking().V1alpha3().DestinationRules()
@@ -467,7 +470,8 @@ func (lb *LoadBalancer) mergeService(service *v1.Service) sets.String {
 		info, exists := lb.serviceMap[serviceName]
 		// TODO: check health of the socket? What if ProxyLoop exited?
 		if exists && sameConfig(info, service, servicePort) {
-			// Nothing changed.
+			// Network config unchanged — but annotation may have been added/removed.
+			lb.syncNodeSelectPolicy(serviceName, service)
 			continue
 		}
 		if exists {
@@ -503,6 +507,11 @@ func (lb *LoadBalancer) mergeService(service *v1.Service) sets.String {
 		if err := lb.NewService(serviceName, info.sessionAffinityType, info.stickyMaxAgeSeconds); err != nil {
 			klog.ErrorS(err, "Failed to new service", "serviceName", serviceName)
 		}
+
+		// If the Service is annotated with edgemesh.kubeedge.io/node-select="true",
+		// register a NodeSelectPolicy so callers can steer requests to a specific
+		// edge node via the X-EdgeMesh-Target-Node HTTP header.
+		lb.syncNodeSelectPolicy(serviceName, service)
 
 		info.setStarted()
 	}
@@ -754,6 +763,12 @@ func (lb *LoadBalancer) OnDestinationRuleAdd(dr *istioapi.DestinationRule) {
 			continue
 		}
 		lb.policyMutex.Lock()
+		// NodeSelectPolicy is driven by Service annotations, not DestinationRules.
+		// Don't overwrite it when a DR arrives for the same service.
+		if existing, exists := lb.policyMap[svcPort]; exists && existing.Name() == NodeSelect {
+			lb.policyMutex.Unlock()
+			continue
+		}
 		lb.setLoadBalancerPolicy(dr, policyName, svcPort, state.endpoints)
 		lb.policyMutex.Unlock()
 	}
@@ -769,6 +784,12 @@ func (lb *LoadBalancer) OnDestinationRuleUpdate(oldDr, dr *istioapi.DestinationR
 			continue
 		}
 		lb.policyMutex.Lock()
+		// NodeSelectPolicy is driven by Service annotations, not DestinationRules.
+		// Don't overwrite it when a DR update arrives for the same service.
+		if existing, exists := lb.policyMap[svcPort]; exists && existing.Name() == NodeSelect {
+			lb.policyMutex.Unlock()
+			continue
+		}
 		if policy, exists := lb.policyMap[svcPort]; exists && policy.Name() != policyName {
 			lb.policyMap[svcPort].Release()
 			delete(lb.policyMap, svcPort)
@@ -814,24 +835,29 @@ func (lb *LoadBalancer) setLoadBalancerPolicy(dr *istioapi.DestinationRule, poli
 }
 
 // TryPickEndpoint try to pick a service endpoint from load-balance strategy.
+// Returns (endpoint, req, picked, err):
+//   - picked=false, err=nil  → no policy registered, caller should use default round-robin
+//   - picked=true,  err=nil  → policy successfully selected an endpoint
+//   - picked=true,  err!=nil → policy explicitly rejected the request (e.g. NodeSelectPolicy
+//     with fallback=false and target node unavailable); caller must NOT fall back
 func (lb *LoadBalancer) tryPickEndpoint(svcPort proxy.ServicePortName, sessionAffinityEnabled bool, endpoints []string,
-	srcAddr net.Addr, netConn net.Conn, cliReq *http.Request) (string, *http.Request, bool) {
+	srcAddr net.Addr, netConn net.Conn, cliReq *http.Request) (string, *http.Request, bool, error) {
 	lb.policyMutex.Lock()
 	defer lb.policyMutex.Unlock()
 
 	policy, exists := lb.policyMap[svcPort]
 	if !exists {
-		return "", cliReq, false
+		return "", cliReq, false, nil
 	}
 	if exists && sessionAffinityEnabled {
 		klog.Warningf("LoadBalancer policy conflicted with sessionAffinity: ClientIP")
-		return "", cliReq, false
+		return "", cliReq, false, nil
 	}
 	endpoint, req, err := policy.Pick(endpoints, srcAddr, netConn, cliReq)
 	if err != nil {
-		return "", req, false
+		return "", req, true, err
 	}
-	return endpoint, req, true
+	return endpoint, req, true, nil
 }
 
 func (lb *LoadBalancer) nextEndpointWithConn(svcPort proxy.ServicePortName, srcAddr net.Addr, sessionAffinityReset bool,
@@ -854,7 +880,12 @@ func (lb *LoadBalancer) nextEndpointWithConn(svcPort proxy.ServicePortName, srcA
 
 	// Note: because loadBalance strategy may have read http.Request from inConn,
 	// so here we need to return it to outConn!
-	endpoint, req, picked := lb.tryPickEndpoint(svcPort, sessionAffinityEnabled, state.endpoints, srcAddr, netConn, cliReq)
+	endpoint, req, picked, pickErr := lb.tryPickEndpoint(svcPort, sessionAffinityEnabled, state.endpoints, srcAddr, netConn, cliReq)
+	if pickErr != nil {
+		// Policy explicitly rejected the request (e.g. NodeSelectPolicy fallback=false,
+		// target node unavailable). Do NOT fall back to round-robin.
+		return "", req, pickErr
+	}
 	if picked {
 		return endpoint, req, nil
 	}
@@ -1036,4 +1067,39 @@ func (lb *LoadBalancer) GetServicePortName(namespacedName types.NamespacedName, 
 		}
 	}
 	return proxy.ServicePortName{}, false
+}
+
+// syncNodeSelectPolicy registers or removes the NodeSelectPolicy for svcPort
+// based on the Service's annotations. Safe to call on every mergeService pass
+// (both new services and no-op network-config updates) so annotation changes
+// take effect without a restart.
+func (lb *LoadBalancer) syncNodeSelectPolicy(svcPort proxy.ServicePortName, service *v1.Service) {
+	lb.policyMutex.Lock()
+	defer lb.policyMutex.Unlock()
+
+	if service.Annotations[defaults.AnnotationNodeSelect] != "true" {
+		// Annotation removed: tear down the policy if one was registered.
+		if _, exists := lb.policyMap[svcPort]; exists {
+			if lb.policyMap[svcPort].Name() == NodeSelect {
+				lb.policyMap[svcPort].Release()
+				delete(lb.policyMap, svcPort)
+				klog.V(2).InfoS("NodeSelect policy removed for service", "serviceName", svcPort)
+			}
+		}
+		return
+	}
+
+	fallback := service.Annotations[defaults.AnnotationNodeSelectFallback] == "true"
+
+	// Avoid replacing an identical policy on every sync.
+	if existing, exists := lb.policyMap[svcPort]; exists && existing.Name() == NodeSelect {
+		existingNS, ok := existing.(*NodeSelectPolicy)
+		if ok && existingNS.fallback == fallback {
+			return // nothing changed
+		}
+		existing.Release()
+	}
+
+	lb.policyMap[svcPort] = NewNodeSelectPolicy(fallback)
+	klog.V(2).InfoS("NodeSelect policy enabled for service", "serviceName", svcPort, "fallback", fallback)
 }

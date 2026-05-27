@@ -183,6 +183,26 @@ push: images
 push-multi-platform-images:
 	bash hack/make-rules/push.sh
 
+# push-agent: build & push multi-arch agent image (amd64 + arm64) via docker manifest.
+# Does NOT use buildx, so it works behind a daemon-level proxy.
+# Usage: make push-agent REGISTRY=toolcenter.tencentcloudcr.com/w3-tools/kvp IMAGE_TAG=v1.17.0-nodeselect
+AGENT_IMAGE ?= $(REGISTRY)/edgemesh-agent
+.PHONY: push-agent
+push-agent:
+	@test -n "$(REGISTRY)" || (echo "ERROR: REGISTRY is not set. Usage: make push-agent REGISTRY=<registry>/<org>" && exit 1)
+	docker build --platform linux/amd64 \
+		--build-arg GO_LDFLAGS=$(GO_LDFLAGS) \
+		-t $(AGENT_IMAGE):$(IMAGE_TAG)-amd64 --push \
+		-f build/agent/Dockerfile .
+	docker build --platform linux/arm64 \
+		--build-arg GO_LDFLAGS=$(GO_LDFLAGS) \
+		-t $(AGENT_IMAGE):$(IMAGE_TAG)-arm64 --push \
+		-f build/agent/Dockerfile .
+	docker manifest create --amend $(AGENT_IMAGE):$(IMAGE_TAG) \
+		$(AGENT_IMAGE):$(IMAGE_TAG)-amd64 \
+		$(AGENT_IMAGE):$(IMAGE_TAG)-arm64
+	docker manifest push $(AGENT_IMAGE):$(IMAGE_TAG)
+
 # update spiderpool helm charts
 update-spiderpool-charts:
 	bash hack/update-spiderpool-charts.sh

@@ -176,6 +176,73 @@ hostname-lb-edge-7898fff5f9-xjp86
 hostname-lb-edge-7898fff5f9-iq39z
 ```
 
+## Node-Select Load Balance
+
+The `NodeSelectPolicy` allows callers to steer individual HTTP requests to a pod running on a **specific edge node** by setting the `X-EdgeMesh-Target-Node` request header — without requiring a separate Service per node.
+
+### Enable on a Service
+
+Add the annotation `edgemesh.kubeedge.io/node-select: "true"` to the Service. No DestinationRule is needed.
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: hostname-lb-svc
+  annotations:
+    edgemesh.kubeedge.io/node-select: "true"
+    # Optional: fall back to a random endpoint when the target node has no pods.
+    # Omit or set to "false" (default) to return an error instead.
+    edgemesh.kubeedge.io/node-select-fallback: "true"
+spec:
+  selector:
+    app: hostname-lb-edge
+  ports:
+    - name: http-0
+      port: 12345
+      protocol: TCP
+      targetPort: 9376
+```
+
+Deploy the example:
+
+```shell
+$ kubectl apply -f examples/hostname-lb-nodeselect.yaml
+deployment.apps/hostname-lb-edge created
+service/hostname-lb-svc created
+```
+
+:::tip
+The annotation is hot-reloaded — adding or removing it takes effect immediately without restarting EdgeMesh.
+:::
+
+### Send a request to a specific node
+
+Pass the `X-EdgeMesh-Target-Node` header with the target node name:
+
+```shell
+$ kubectl exec -it alpine-test -- sh
+# Route to edge-node-1
+/ # curl -H "X-EdgeMesh-Target-Node: edge-node-1" hostname-lb-svc:12345
+hostname-lb-edge-7898fff5f9-xjp86
+
+# Route to edge-node-2
+/ # curl -H "X-EdgeMesh-Target-Node: edge-node-2" hostname-lb-svc:12345
+hostname-lb-edge-7898fff5f9-w82nw
+
+# No header → random endpoint (same as RANDOM policy)
+/ # curl hostname-lb-svc:12345
+hostname-lb-edge-7898fff5f9-iq39z
+```
+
+### Behavior summary
+
+| Scenario | `node-select-fallback: "false"` (default) | `node-select-fallback: "true"` |
+|---|---|---|
+| Header present, node has pods | Routes to a pod on that node | Routes to a pod on that node |
+| Header present, node has **no** pods | Returns an error | Falls back to a random endpoint |
+| Header **absent** | Random endpoint | Random endpoint |
+
 ## Cross-Edge-Cloud :star:
 
 The busybox-edge in the edgezone can access the tcp-echo-cloud on the cloud, and the busybox-cloud in the cloudzone can access the tcp-echo-edge on the edge

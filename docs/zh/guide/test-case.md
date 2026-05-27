@@ -176,6 +176,74 @@ hostname-lb-edge-7898fff5f9-xjp86
 hostname-lb-edge-7898fff5f9-iq39z
 ```
 
+## 节点定向负载均衡
+
+`NodeSelectPolicy` 允许调用方通过在 HTTP 请求中携带 `X-EdgeMesh-Target-Node` 请求头，将**单次请求**路由到指定边缘节点上的 Pod，无需为每个节点单独创建 Service。
+
+### 在 Service 上启用
+
+在 Service 的 Annotation 中添加 `edgemesh.kubeedge.io/node-select: "true"`，无需创建 DestinationRule。
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: hostname-lb-svc
+  annotations:
+    # 开启节点定向路由
+    edgemesh.kubeedge.io/node-select: "true"
+    # 可选：目标节点无 Pod 时降级为随机路由。
+    # 不填或设为 "false"（默认）时返回错误。
+    edgemesh.kubeedge.io/node-select-fallback: "true"
+spec:
+  selector:
+    app: hostname-lb-edge
+  ports:
+    - name: http-0
+      port: 12345
+      protocol: TCP
+      targetPort: 9376
+```
+
+部署示例：
+
+```shell
+$ kubectl apply -f examples/hostname-lb-nodeselect.yaml
+deployment.apps/hostname-lb-edge created
+service/hostname-lb-svc created
+```
+
+:::tip
+该 Annotation 支持热更新——添加或删除 Annotation 后，无需重启 EdgeMesh 即可立即生效。
+:::
+
+### 发送请求到指定节点
+
+在请求头中携带 `X-EdgeMesh-Target-Node`，值为目标节点名称：
+
+```shell
+$ kubectl exec -it alpine-test -- sh
+# 路由到 edge-node-1
+/ # curl -H "X-EdgeMesh-Target-Node: edge-node-1" hostname-lb-svc:12345
+hostname-lb-edge-7898fff5f9-xjp86
+
+# 路由到 edge-node-2
+/ # curl -H "X-EdgeMesh-Target-Node: edge-node-2" hostname-lb-svc:12345
+hostname-lb-edge-7898fff5f9-w82nw
+
+# 不携带请求头 → 随机路由（与 RANDOM 策略相同）
+/ # curl hostname-lb-svc:12345
+hostname-lb-edge-7898fff5f9-iq39z
+```
+
+### 行为说明
+
+| 场景 | `node-select-fallback: "false"`（默认） | `node-select-fallback: "true"` |
+|---|---|---|
+| 携带请求头，目标节点有 Pod | 路由到该节点上的 Pod | 路由到该节点上的 Pod |
+| 携带请求头，目标节点**无 Pod** | 返回错误 | 降级为随机路由 |
+| **未携带**请求头 | 随机路由 | 随机路由 |
+
 ## 跨边云通信 :star:
 
 处于 edgezone 的 busybox-edge 应用能够访问云上的 tcp-echo-cloud 应用，处于 cloudzone 的 busybox-cloud 应用能够访问边缘的 tcp-echo-edge 应用
