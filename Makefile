@@ -183,25 +183,61 @@ push: images
 push-multi-platform-images:
 	bash hack/make-rules/push.sh
 
-# push-agent: build & push multi-arch agent image (amd64 + arm64) via docker manifest.
-# Does NOT use buildx, so it works behind a daemon-level proxy.
-# Usage: make push-agent REGISTRY=toolcenter.tencentcloudcr.com/w3-tools/kvp IMAGE_TAG=v1.17.0-nodeselect
+# build-agent: build multi-arch agent image (amd64 + arm64) locally, no push.
+# Usage: make build-agent REGISTRY=toolcenter.tencentcloudcr.com/w3-tools/kvp IMAGE_TAG=v1.17.0-nodeselect
 AGENT_IMAGE ?= $(REGISTRY)/edgemesh-agent
-.PHONY: push-agent
-push-agent:
-	@test -n "$(REGISTRY)" || (echo "ERROR: REGISTRY is not set. Usage: make push-agent REGISTRY=<registry>/<org>" && exit 1)
+.PHONY: build-agent
+build-agent:
+	@test -n "$(REGISTRY)" || (echo "ERROR: REGISTRY is not set. Usage: make build-agent REGISTRY=<registry>/<org>" && exit 1)
 	docker build --platform linux/amd64 \
 		--build-arg GO_LDFLAGS=$(GO_LDFLAGS) \
-		-t $(AGENT_IMAGE):$(IMAGE_TAG)-amd64 --push \
+		-t $(AGENT_IMAGE):$(IMAGE_TAG)-amd64 \
 		-f build/agent/Dockerfile .
 	docker build --platform linux/arm64 \
 		--build-arg GO_LDFLAGS=$(GO_LDFLAGS) \
-		-t $(AGENT_IMAGE):$(IMAGE_TAG)-arm64 --push \
+		-t $(AGENT_IMAGE):$(IMAGE_TAG)-arm64 \
 		-f build/agent/Dockerfile .
+
+# push-agent: push pre-built multi-arch agent image via docker manifest.
+# Requires build-agent to have been run first.
+# Usage: make push-agent REGISTRY=toolcenter.tencentcloudcr.com/w3-tools/kvp IMAGE_TAG=v1.17.0-nodeselect
+.PHONY: push-agent
+push-agent:
+	@test -n "$(REGISTRY)" || (echo "ERROR: REGISTRY is not set. Usage: make push-agent REGISTRY=<registry>/<org>" && exit 1)
+	docker push $(AGENT_IMAGE):$(IMAGE_TAG)-amd64
+	docker push $(AGENT_IMAGE):$(IMAGE_TAG)-arm64
 	docker manifest create --amend $(AGENT_IMAGE):$(IMAGE_TAG) \
 		$(AGENT_IMAGE):$(IMAGE_TAG)-amd64 \
 		$(AGENT_IMAGE):$(IMAGE_TAG)-arm64
 	docker manifest push $(AGENT_IMAGE):$(IMAGE_TAG)
+
+# build-gateway: build multi-arch gateway image (amd64 + arm64) locally, no push.
+# Usage: make build-gateway REGISTRY=toolcenter.tencentcloudcr.com/w3-tools/kvp IMAGE_TAG=v1.17.0
+GATEWAY_IMAGE ?= $(REGISTRY)/edgemesh-gateway
+.PHONY: build-gateway
+build-gateway:
+	@test -n "$(REGISTRY)" || (echo "ERROR: REGISTRY is not set. Usage: make build-gateway REGISTRY=<registry>/<org>" && exit 1)
+	docker build --platform linux/amd64 \
+		--build-arg GO_LDFLAGS=$(GO_LDFLAGS) \
+		-t $(GATEWAY_IMAGE):$(IMAGE_TAG)-amd64 \
+		-f build/gateway/Dockerfile .
+	docker build --platform linux/arm64 \
+		--build-arg GO_LDFLAGS=$(GO_LDFLAGS) \
+		-t $(GATEWAY_IMAGE):$(IMAGE_TAG)-arm64 \
+		-f build/gateway/Dockerfile .
+
+# push-gateway: push pre-built multi-arch gateway image via docker manifest.
+# Requires build-gateway to have been run first.
+# Usage: make push-gateway REGISTRY=toolcenter.tencentcloudcr.com/w3-tools/kvp IMAGE_TAG=v1.17.0
+.PHONY: push-gateway
+push-gateway:
+	@test -n "$(REGISTRY)" || (echo "ERROR: REGISTRY is not set. Usage: make push-gateway REGISTRY=<registry>/<org>" && exit 1)
+	docker push $(GATEWAY_IMAGE):$(IMAGE_TAG)-amd64
+	docker push $(GATEWAY_IMAGE):$(IMAGE_TAG)-arm64
+	docker manifest create --amend $(GATEWAY_IMAGE):$(IMAGE_TAG) \
+		$(GATEWAY_IMAGE):$(IMAGE_TAG)-amd64 \
+		$(GATEWAY_IMAGE):$(IMAGE_TAG)-arm64
+	docker manifest push $(GATEWAY_IMAGE):$(IMAGE_TAG)
 
 # update spiderpool helm charts
 update-spiderpool-charts:
