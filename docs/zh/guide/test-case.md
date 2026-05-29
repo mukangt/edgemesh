@@ -236,6 +236,13 @@ hostname-lb-edge-7898fff5f9-w82nw
 hostname-lb-edge-7898fff5f9-iq39z
 ```
 
+:::tip
+请求头 key 查找**大小写不敏感**，以下写法等价：
+- `X-EdgeMesh-Target-Node`（标准写法）
+- `x-edgemesh-target-node`（HTTP/2 小写形式，如经 Envoy 转发）
+- `X-EDGEMESH-TARGET-NODE`
+:::
+
 ### 行为说明
 
 | 场景 | `node-select-fallback: "false"`（默认） | `node-select-fallback: "true"` |

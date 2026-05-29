@@ -235,6 +235,13 @@ hostname-lb-edge-7898fff5f9-w82nw
 hostname-lb-edge-7898fff5f9-iq39z
 ```
 
+:::tip
+The header key lookup is **case-insensitive**. All of the following forms are equivalent:
+- `X-EdgeMesh-Target-Node` (canonical)
+- `x-edgemesh-target-node` (HTTP/2 lowercase, e.g. forwarded by Envoy)
+- `X-EDGEMESH-TARGET-NODE`
+:::
+
 ### Behavior summary
 
 | Scenario | `node-select-fallback: "false"` (default) | `node-select-fallback: "true"` |
