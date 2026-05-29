@@ -236,10 +236,9 @@ hostname-lb-edge-7898fff5f9-iq39z
 ```
 
 :::tip
-The header key lookup is **case-insensitive**. All of the following forms are equivalent:
+The header key supports two forms:
 - `X-EdgeMesh-Target-Node` (canonical)
-- `x-edgemesh-target-node` (HTTP/2 lowercase, e.g. forwarded by Envoy)
-- `X-EDGEMESH-TARGET-NODE`
+- `x-edgemesh-target-node` (HTTP/2 all-lowercase, e.g. forwarded by Envoy)
 :::
 
 ### Behavior summary

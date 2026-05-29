@@ -237,10 +237,9 @@ hostname-lb-edge-7898fff5f9-iq39z
 ```
 
 :::tip
-请求头 key 查找**大小写不敏感**，以下写法等价：
+请求头 key 支持以下两种形式：
 - `X-EdgeMesh-Target-Node`（标准写法）
-- `x-edgemesh-target-node`（HTTP/2 小写形式，如经 Envoy 转发）
-- `X-EDGEMESH-TARGET-NODE`
+- `x-edgemesh-target-node`（HTTP/2 全小写形式，如经 Envoy 转发）
 :::
 
 ### 行为说明
