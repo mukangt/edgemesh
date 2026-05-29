@@ -202,11 +202,16 @@ func (n *NodeSelectPolicy) Pick(endpoints []string, _ net.Addr, netConn net.Conn
 	// No parseable HTTP request (raw TCP/UDP) or header absent → random endpoint.
 	targetNode := ""
 	if cliReq != nil {
-		// Header.Get normalizes the key via textproto.CanonicalMIMEHeaderKey before
-		// lookup, so both "X-EdgeMesh-Target-Node" and HTTP/2 all-lowercase
-		// "x-edgemesh-target-node" map to the same canonical key "X-Edgemesh-Target-Node".
-		// A single Get call covers all casing variants stored by http.ReadRequest.
-		targetNode = cliReq.Header.Get("x-edgemesh-target-node")
+		// HTTP/1.1: http.ReadRequest canonicalizes header keys, so Header.Get works.
+		// HTTP/2: Go stores header keys as-is (all lowercase) without canonicalization,
+		// so Header.Get("X-EdgeMesh-Target-Node") misses "x-edgemesh-target-node".
+		// Check the canonical form first, then fall back to direct lowercase map access.
+		targetNode = cliReq.Header.Get("X-EdgeMesh-Target-Node")
+		if targetNode == "" {
+			if vals, ok := cliReq.Header["x-edgemesh-target-node"]; ok && len(vals) > 0 {
+				targetNode = vals[0]
+			}
+		}
 	}
 	if targetNode == "" {
 		return endpoints[rand.Intn(len(endpoints))], cliReq, nil
