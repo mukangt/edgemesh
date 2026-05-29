@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/buraksezer/consistent"
@@ -202,7 +203,14 @@ func (n *NodeSelectPolicy) Pick(endpoints []string, _ net.Addr, netConn net.Conn
 	// No parseable HTTP request (raw TCP/UDP) or header absent → random endpoint.
 	targetNode := ""
 	if cliReq != nil {
-		targetNode = cliReq.Header.Get("X-EdgeMesh-Target-Node")
+		// Normalize header keys to lowercase for case-insensitive matching,
+		// handling HTTP/2 lowercased headers forwarded as HTTP/1.1.
+		for key, vals := range cliReq.Header {
+			if strings.ToLower(key) == "x-edgemesh-target-node" && len(vals) > 0 {
+				targetNode = vals[0]
+				break
+			}
+		}
 	}
 	if targetNode == "" {
 		return endpoints[rand.Intn(len(endpoints))], cliReq, nil
